@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Editor PDF PRO V3 - Cartelera</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;font-family:system-ui}
+body{background:#09090b;color:#fff;display:flex;flex-direction:column;height:100vh}
+.top{background:#18181b;border-bottom:1px solid #27272a;padding:10px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.top button{padding:9px 12px;border-radius:10px;border:1px solid #27272a;background:#27272a;color:#fff;font-weight:800;font-size:11px;cursor:pointer}
+.top button.rojo{background:#f43f5e;border-color:#f43f5e}
+#viewer{flex:1;overflow:auto;background:#000;display:flex;flex-direction:column;align-items:center;padding:10px;gap:12px}
+.page-wrap{position:relative;background:#fff;border-radius:8px;box-shadow:0 10px 30px rgba(0,0,0,.5)}
+.page-wrap canvas{display:block;max-width:90vw}
+</style>
+</head>
+<body>
+<div class="top">
+<input type="file" id="pdfInput" accept="application/pdf" style="font-size:11px">
+<button onclick="addImage()">🖼️ Imagen</button>
+<button onclick="zoomIn()">🔍+</button>
+<button onclick="zoomOut()">🔍-</button>
+<button onclick="deletePage()">🗑️ Borrar</button>
+<button class="rojo" onclick="savePDF()">💾 GUARDAR</button>
+<span id="info" style="font-size:10px;color:#71717a">Doble click para borrar imagen</span>
+</div>
+<div id="viewer"></div>
+<input type="file" id="imgInput" accept="image/*" style="display:none">
+<script>
+let zoom=1.2, pdfDoc=null, pdfLibDoc=null, currentPage=0, pages=[];
+const viewer=document.getElementById('viewer');
+pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+document.getElementById('pdfInput').addEventListener('change',async e=>{
+ const file=e.target.files[0]; if(!file) return;
+ const pdfBytes=await file.arrayBuffer();
+ pdfLibDoc=await PDFLib.PDFDocument.load(pdfBytes);
+ pdfDoc=await pdfjsLib.getDocument({data:pdfBytes}).promise;
+ renderAll();
+});
+
+async function renderAll(){
+ viewer.innerHTML=''; pages=[];
+ for(let i=1;i<=pdfDoc.numPages;i++){
+  const page=await pdfDoc.getPage(i);
+  const viewport=page.getViewport({scale:zoom});
+  const wrap=document.createElement('div'); wrap.className='page-wrap';
+  const canvas=document.createElement('canvas'); const ctx=canvas.getContext('2d');
+  canvas.width=viewport.width; canvas.height=viewport.height;
+  await page.render({canvasContext:ctx,viewport}).promise;
+  wrap.appendChild(canvas);
+  wrap.onclick=()=>{currentPage=i-1; document.querySelectorAll('.page-wrap').forEach(p=>p.style.outline=''); wrap.style.outline='3px solid #f43f5e';}
+  viewer.appendChild(wrap);
+  pages.push({wrap,canvas});
+ }
+}
+
+function addImage(){
+ if(!pages[currentPage]) return alert('Carga un PDF primero');
+ document.getElementById('imgInput').click();
+}
+document.getElementById('imgInput').addEventListener('change',async e=>{
+ const file=e.target.files[0]; if(!file) return;
+ const url=URL.createObjectURL(file);
+ const wrap=pages[currentPage].wrap;
+ const box=document.createElement('div');
+ box.style.cssText="position:absolute;left:30px;top:30px;width:120px;height:80px;border:2px dashed #f43f5e;cursor:move;touch-action:none;z-index:10;background:rgba(0,0,0,.1)";
+ box.innerHTML=`<img src="${url}" style="width:100%;height:100%;object-fit:contain;pointer-events:none"><div class="handle" style="position:absolute;right:-8px;bottom:-8px;width:18px;height:18px;background:#f43f5e;border-radius:50%;cursor:nwse-resize;border:2px solid #fff"></div>`;
+ box.onpointerdown=startDrag;
+ box.ondblclick=()=>box.remove();
+ wrap.appendChild(box);
+});
+
+let drag=null, isResizing=false;
+function startDrag(e){
+ const isHandle=e.target.classList.contains('handle');
+ isResizing=isHandle;
+ drag={el:e.currentTarget,x:e.clientX,y:e.clientY,w:e.currentTarget.offsetWidth,h:e.currentTarget.offsetHeight,left:parseInt(e.currentTarget.style.left),top:parseInt(e.currentTarget.style.top)};
+ e.currentTarget.setPointerCapture(e.pointerId);
+ e.preventDefault();
+}
+window.addEventListener('pointermove',e=>{
+ if(!drag) return;
+ if(isResizing){
+  drag.el.style.width=Math.max(40,drag.w+e.clientX-drag.x)+'px';
+  drag.el.style.height=Math.max(40,drag.h+e.clientY-drag.y)+'px';
+ }else{
+  drag.el.style.left=(drag.left+e.clientX-drag.x)+'px';
+  drag.el.style.top=(drag.top+e.clientY-drag.y)+'px';
+ }
+});
+window.addEventListener('pointerup',()=>{drag=null;isResizing=false;});
+
+function zoomIn(){zoom+=0.2; renderAll();}
+function zoomOut(){zoom=Math.max(0.4,zoom-0.2); renderAll();}
+function deletePage(){if(pages[currentPage] && confirm('¿Borrar página '+(currentPage+1)+'?')) pages[currentPage].wrap.remove();}
+
+async function savePDF(){
+ if(!pdfLibDoc) return alert('Carga PDF primero may');
+ const newDoc=await PDFLib.PDFDocument.create();
+ const vivos = pages.map((p,i)=>({p,i})).filter(o=>document.body.contains(o.p.wrap));
+ if(vivos.length==0) return alert('No hay páginas');
+ const indices = vivos.map(o=>o.i);
+ const copied=await newDoc.copyPages(pdfLibDoc,indices);
+ for(let k=0;k<copied.length;k++){
+  const pg=copied[k];
+  const wrap=vivos[k].p.wrap;
+  const boxes = wrap.querySelectorAll('div[style*="dashed"]');
+  for(const box of boxes){
+   const imgEl=box.querySelector('img');
+   const bytes=await fetch(imgEl.src).then(r=>r.arrayBuffer());
+   let embed; try{embed=await newDoc.embedPng(bytes);}catch{embed=await newDoc.embedJpg(bytes);}
+   const {width,height}=pg.getSize();
+   const x=(parseInt(box.style.left)/wrap.clientWidth)*width;
+   const y=height-((parseInt(box.style.top)/wrap.clientHeight)*height)-(parseInt(box.style.height)/wrap.clientHeight)*height;
+   const w=(parseInt(box.style.width)/wrap.clientWidth)*width;
+   const h=(parseInt(box.style.height)/wrap.clientHeight)*height;
+   pg.drawImage(embed,{x,y,width:w,height:h});
+  }
+  newDoc.addPage(pg);
+ }
+ const out=await newDoc.save();
+ const blob=new Blob([out],{type:'application/pdf'});
+ const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='editado-CARTELERA-PRO.pdf'; a.click();
+}
+</script>
+</body>
+</html>
